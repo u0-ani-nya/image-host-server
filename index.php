@@ -48,14 +48,19 @@ function generate_filename($ext) {
 function get_base_url() {
     $proto = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? (($_SERVER['HTTPS'] ?? 'off') === 'on' ? 'https' : 'http');
     $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
-    // 获取脚本所在目录的 URL 路径
     $scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
     return $proto . '://' . $host . $scriptDir;
 }
 
 function get_self() {
-    // 返回当前脚本的 URL 路径（用于表单 action 和 JS fetch）
     return $_SERVER['SCRIPT_NAME'];
+}
+
+function get_route() {
+    // 优先用 PATH_INFO，没有则用 query string 的 _route 参数
+    $path = $_SERVER['PATH_INFO'] ?? '';
+    if ($path) return $path;
+    return $_GET['_route'] ?? '/';
 }
 
 function check_admin_auth() {
@@ -66,24 +71,11 @@ function check_admin_auth() {
 // ─── 路由 ───
 
 $method = $_SERVER['REQUEST_METHOD'];
-
-// 用 PATH_INFO 或从 REQUEST_URI 解析出相对路径
-$pathInfo = $_SERVER['PATH_INFO'] ?? '';
-if (!$pathInfo) {
-    // 从 REQUEST_URI 中去掉 SCRIPT_NAME 前缀
-    $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-    $scriptName = $_SERVER['SCRIPT_NAME'];
-    if (str_starts_with($requestUri, $scriptName)) {
-        $pathInfo = substr($requestUri, strlen($scriptName));
-    } else {
-        $pathInfo = $requestUri;
-    }
-}
-if (!$pathInfo || $pathInfo === '/') $pathInfo = '/';
+$route = get_route();
 
 // ─── 管理页面登录 ───
 
-if ($method === 'POST' && $pathInfo === '/api/login') {
+if ($method === 'POST' && $route === '/api/login') {
     $input = json_decode(file_get_contents('php://input'), true);
     $password = $input['password'] ?? '';
     if ($password !== ADMIN_PASSWORD) {
@@ -94,7 +86,7 @@ if ($method === 'POST' && $pathInfo === '/api/login') {
     json_response(['ok' => true]);
 }
 
-if ($method === 'POST' && $pathInfo === '/api/logout') {
+if ($method === 'POST' && $route === '/api/logout') {
     session_start();
     session_destroy();
     json_response(['ok' => true]);
@@ -102,22 +94,17 @@ if ($method === 'POST' && $pathInfo === '/api/logout') {
 
 // ─── 管理页面 ───
 
-if ($method === 'GET' && $pathInfo === '/') {
+if ($method === 'GET' && $route === '/') {
     session_start();
     $logged_in = !empty($_SESSION['admin']);
-
-    if (!$logged_in) {
-        show_login_page();
-        exit;
-    }
-
+    if (!$logged_in) { show_login_page(); exit; }
     show_admin_page();
     exit;
 }
 
 // ─── API: 列出密钥 ───
 
-if ($method === 'GET' && $pathInfo === '/api/keys') {
+if ($method === 'GET' && $route === '/api/keys') {
     if (!check_admin_auth()) error_response('未登录', 401);
     $keys = load_keys();
     $file_count = 0;
@@ -129,7 +116,7 @@ if ($method === 'GET' && $pathInfo === '/api/keys') {
 
 // ─── API: 生成密钥 ───
 
-if ($method === 'POST' && $pathInfo === '/api/keys') {
+if ($method === 'POST' && $route === '/api/keys') {
     if (!check_admin_auth()) error_response('未登录', 401);
     $input = json_decode(file_get_contents('php://input'), true);
     $note = mb_substr(trim($input['note'] ?? ''), 0, 100);
@@ -146,9 +133,9 @@ if ($method === 'POST' && $pathInfo === '/api/keys') {
 
 // ─── API: 删除密钥 ───
 
-if ($method === 'DELETE' && str_starts_with($pathInfo, '/api/keys/')) {
+if ($method === 'DELETE' && str_starts_with($route, '/api/keys/')) {
     if (!check_admin_auth()) error_response('未登录', 401);
-    $key = substr($pathInfo, strlen('/api/keys/'));
+    $key = substr($route, strlen('/api/keys/'));
     $keys = load_keys();
     $filtered = array_values(array_filter($keys, fn($k) => $k['key'] !== $key));
     if (count($filtered) === count($keys)) error_response('密钥不存在', 404);
@@ -158,7 +145,7 @@ if ($method === 'DELETE' && str_starts_with($pathInfo, '/api/keys/')) {
 
 // ─── 上传图片 ───
 
-if ($method === 'POST' && $pathInfo === '/upload') {
+if ($method === 'POST' && $route === '/upload') {
     $token = get_auth_token();
     if (!$token || !is_valid_key($token)) {
         error_response('无效的上传密钥', 401);
@@ -201,13 +188,13 @@ if ($method === 'POST' && $pathInfo === '/upload') {
 
 // ─── 删除图片 ───
 
-if ($method === 'DELETE' && str_starts_with($pathInfo, '/file/')) {
+if ($method === 'DELETE' && str_starts_with($route, '/file/')) {
     $token = get_auth_token();
     if (!$token || !is_valid_key($token)) {
         error_response('无效的上传密钥', 401);
     }
 
-    $filename = basename(substr($pathInfo, strlen('/file/')));
+    $filename = basename(substr($route, strlen('/file/')));
     $filepath = UPLOADS_DIR . $filename;
     if (!file_exists($filepath)) error_response('文件不存在', 404);
 
@@ -217,8 +204,8 @@ if ($method === 'DELETE' && str_starts_with($pathInfo, '/file/')) {
 
 // ─── 访问图片 ───
 
-if ($method === 'GET' && str_starts_with($pathInfo, '/images/')) {
-    $filename = basename(substr($pathInfo, strlen('/images/')));
+if ($method === 'GET' && str_starts_with($route, '/images/')) {
+    $filename = basename(substr($route, strlen('/images/')));
     $filepath = UPLOADS_DIR . $filename;
     if (!file_exists($filepath)) {
         http_response_code(404);
@@ -229,9 +216,8 @@ if ($method === 'GET' && str_starts_with($pathInfo, '/images/')) {
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
     $mime = ['png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'webp' => 'image/webp'][$ext] ?? 'application/octet-stream';
 
-    $size = filesize($filepath);
     header('Content-Type: ' . $mime);
-    header('Content-Length: ' . $size);
+    header('Content-Length: ' . filesize($filepath));
     header('Cache-Control: public, max-age=31536000');
     readfile($filepath);
     exit;
@@ -240,7 +226,8 @@ if ($method === 'GET' && str_starts_with($pathInfo, '/images/')) {
 // ─── 404 ───
 
 http_response_code(404);
-echo 'Not Found';
+header('Content-Type: application/json; charset=utf-8');
+echo json_encode(['error' => 'Not Found', 'route' => $route]);
 
 // ═══════════════════════════════════════════
 //  页面渲染
@@ -268,7 +255,6 @@ button:disabled{background:#999;cursor:not-allowed}
 .toast.show{opacity:1}
 .toast.error{background:#fee;color:#c00;border:1px solid #fcc}
 .toast.success{background:#efe;color:#060;border:1px solid #cfc}
-.toast.info{background:#eef;color:#006;border:1px for #ccf}
 </style>
 </head>
 <body>
@@ -301,12 +287,18 @@ button:disabled{background:#999;cursor:not-allowed}
     btn.disabled = true;
     btn.textContent = '登录中...';
     try {
-      var res = await fetch(self + '/api/login', {
+      var res = await fetch(self + '?_route=/api/login', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({password: pwd})
       });
-      var data = await res.json();
+      var text = await res.text();
+      var data;
+      try { data = JSON.parse(text); } catch(e) {
+        toast('服务器返回了非 JSON 响应 (' + res.status + ')', 'error');
+        console.error('Response:', text.substring(0, 500));
+        return;
+      }
       if (res.ok) {
         toast('登录成功', 'success');
         setTimeout(function(){ location.reload(); }, 500);
@@ -314,7 +306,7 @@ button:disabled{background:#999;cursor:not-allowed}
         toast(data.error || '登录失败 (' + res.status + ')', 'error');
       }
     } catch (e) {
-      toast('请求失败: ' + e.message, 'error');
+      toast('网络错误: ' + e.message, 'error');
     } finally {
       btn.disabled = false;
       btn.textContent = '登录';
@@ -360,8 +352,10 @@ h1{font-size:20px;margin-bottom:4px}
 .input-row input{flex:1;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px}
 .server-url{background:#f9f9f9;padding:10px 14px;border-radius:8px;font-family:monospace;font-size:12px;word-break:break-all;margin-bottom:12px;border:1px dashed #ddd}
 .empty{color:#aaa;font-size:13px;text-align:center;padding:20px}
-.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:999;opacity:0;transition:.3s;pointer-events:none}
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);padding:12px 20px;border-radius:8px;font-size:13px;z-index:999;opacity:0;transition:.3s;pointer-events:none;max-width:80vw;text-align:center}
 .toast.show{opacity:1}
+.toast.error{background:#fee;color:#c00;border:1px solid #fcc}
+.toast.success{background:#efe;color:#060;border:1px solid #cfc}
 .stats{display:flex;gap:16px;margin-bottom:16px;font-size:13px;color:#666}
 .stats span{background:#f0f0f0;padding:4px 10px;border-radius:6px}
 .top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
@@ -404,21 +398,26 @@ h1{font-size:20px;margin-bottom:4px}
 (function(){
   var self = <?= json_encode($self) ?>;
 
+  function toast(msg, type) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast ' + (type || 'error');
+    el.classList.add('show');
+    setTimeout(function(){ el.classList.remove('show'); }, 3000);
+  }
+
+  function api(path, opts) {
+    return fetch(self + '?_route=' + encodeURIComponent(path), opts || {});
+  }
+
   document.getElementById('logoutBtn').addEventListener('click', function() {
-    fetch(self + '/api/logout', {method:'POST'}).then(function(){ location.reload(); });
+    api('/api/logout', {method:'POST'}).then(function(){ location.reload(); });
   });
   document.getElementById('genBtn').addEventListener('click', generateKey);
   document.getElementById('noteInput').addEventListener('keydown', function(e) { if(e.key==='Enter') generateKey(); });
 
-  function toast(msg) {
-    var el = document.getElementById('toast');
-    el.textContent = msg;
-    el.classList.add('show');
-    setTimeout(function(){ el.classList.remove('show'); }, 2000);
-  }
-
   async function loadKeys() {
-    var res = await fetch(self + '/api/keys');
+    var res = await api('/api/keys');
     if (res.status === 401) { location.reload(); return; }
     var data = await res.json();
     var list = document.getElementById('keyList');
@@ -446,25 +445,25 @@ h1{font-size:20px;margin-bottom:4px}
 
     list.querySelectorAll('[data-copy]').forEach(function(btn) {
       btn.addEventListener('click', function() {
-        navigator.clipboard.writeText(btn.getAttribute('data-copy')).then(function(){ toast('已复制到剪贴板'); });
+        navigator.clipboard.writeText(btn.getAttribute('data-copy')).then(function(){ toast('已复制到剪贴板', 'success'); });
       });
     });
     list.querySelectorAll('[data-del]').forEach(function(btn) {
       btn.addEventListener('click', function() {
         var key = btn.getAttribute('data-del');
         if (!confirm('确定删除此密钥？')) return;
-        fetch(self + '/api/keys/' + key, { method: 'DELETE' }).then(function(){ toast('密钥已删除'); loadKeys(); });
+        api('/api/keys/' + key, { method: 'DELETE' }).then(function(){ toast('密钥已删除', 'success'); loadKeys(); });
       });
     });
   }
 
   async function generateKey() {
     var note = document.getElementById('noteInput').value.trim();
-    var res = await fetch(self + '/api/keys', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({note: note}) });
+    var res = await api('/api/keys', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({note: note}) });
     var data = await res.json();
     if (data.key) {
       document.getElementById('noteInput').value = '';
-      toast('密钥已生成');
+      toast('密钥已生成', 'success');
       loadKeys();
     }
   }
