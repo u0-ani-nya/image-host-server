@@ -32,7 +32,7 @@ function save_keys($keys) {
     $dir = dirname(KEYS_FILE);
     if (!is_dir($dir)) mkdir($dir, 0755, true);
     $ok = @file_put_contents(KEYS_FILE, json_encode(['keys' => $keys], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
-    if ($ok === false) error_response('写入密钥文件失败，请检查 data/ 目录权限（需要 PHP 可写）', 500);
+    if ($ok === false) error_response('写入密钥文件失败，请检查 data/ 目录权限', 500);
 }
 
 function is_valid_key($token) {
@@ -57,11 +57,20 @@ function get_self() {
     return $_SERVER['SCRIPT_NAME'];
 }
 
+// 解析路由：支持 PATH_INFO 和 query string 两种方式
 function get_route() {
-    // 优先用 PATH_INFO，没有则用 query string 的 _route 参数
+    // 方式1: PATH_INFO (Nginx 配置了 fastcgi_split_path_info)
     $path = $_SERVER['PATH_INFO'] ?? '';
     if ($path) return $path;
-    return $_GET['_route'] ?? '/';
+    // 方式2: query string _route 参数
+    if (isset($_GET['_route'])) return $_GET['_route'];
+    // 方式3: 从 REQUEST_URI 中去掉 SCRIPT_NAME
+    $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+    $scriptName = $_SERVER['SCRIPT_NAME'];
+    if ($requestUri !== $scriptName && str_starts_with($requestUri, $scriptName)) {
+        return substr($requestUri, strlen($scriptName)) ?: '/';
+    }
+    return '/';
 }
 
 function check_admin_auth() {
@@ -76,7 +85,7 @@ $route = get_route();
 
 // ─── 管理页面登录 ───
 
-if ($method === 'POST' && $route === '/api/login') {
+if ($method === 'POST' && ($route === '/api/login' || $route === '/api/login/')) {
     $input = json_decode(file_get_contents('php://input'), true);
     $password = $input['password'] ?? '';
     if ($password !== ADMIN_PASSWORD) {
@@ -87,7 +96,7 @@ if ($method === 'POST' && $route === '/api/login') {
     json_response(['ok' => true]);
 }
 
-if ($method === 'POST' && $route === '/api/logout') {
+if ($method === 'POST' && ($route === '/api/logout' || $route === '/api/logout/')) {
     session_start();
     session_destroy();
     json_response(['ok' => true]);
@@ -95,7 +104,7 @@ if ($method === 'POST' && $route === '/api/logout') {
 
 // ─── 管理页面 ───
 
-if ($method === 'GET' && $route === '/') {
+if ($method === 'GET' && ($route === '/' || $route === '')) {
     session_start();
     $logged_in = !empty($_SESSION['admin']);
     if (!$logged_in) { show_login_page(); exit; }
@@ -105,7 +114,7 @@ if ($method === 'GET' && $route === '/') {
 
 // ─── API: 列出密钥 ───
 
-if ($method === 'GET' && $route === '/api/keys') {
+if ($method === 'GET' && ($route === '/api/keys' || $route === '/api/keys/')) {
     if (!check_admin_auth()) error_response('未登录', 401);
     $keys = load_keys();
     $file_count = 0;
@@ -117,7 +126,7 @@ if ($method === 'GET' && $route === '/api/keys') {
 
 // ─── API: 生成密钥 ───
 
-if ($method === 'POST' && $route === '/api/keys') {
+if ($method === 'POST' && ($route === '/api/keys' || $route === '/api/keys/')) {
     if (!check_admin_auth()) error_response('未登录', 401);
     $input = json_decode(file_get_contents('php://input'), true);
     $note = mb_substr(trim($input['note'] ?? ''), 0, 100);
@@ -144,9 +153,9 @@ if ($method === 'DELETE' && str_starts_with($route, '/api/keys/')) {
     json_response(['ok' => true]);
 }
 
-// ─── 上传图片 ───
+// ─── 上传图片（兼容 ImgBed API 格式）───
 
-if ($method === 'POST' && $route === '/upload') {
+if ($method === 'POST' && ($route === '/upload' || $route === '/upload/')) {
     $token = get_auth_token();
     if (!$token || !is_valid_key($token)) {
         error_response('无效的上传密钥', 401);
@@ -180,11 +189,15 @@ if ($method === 'POST' && $route === '/upload') {
     }
 
     $base = get_base_url();
-    json_response([
-        'directUrl' => $base . '/images/' . $filename,
-        'pageUrl'   => '',
-        'filename'  => $filename,
-    ]);
+    $directUrl = $base . '/images/' . $filename;
+
+    // 兼容 CloudFlare ImgBed 响应格式
+    // uploadToCfBed() 读取: item.publicUrl || item.url || item.src
+    json_response([[
+        'url'       => $directUrl,
+        'src'       => '/images/' . $filename,
+        'publicUrl' => $directUrl,
+    ]]);
 }
 
 // ─── 删除图片 ───
@@ -228,7 +241,7 @@ if ($method === 'GET' && str_starts_with($route, '/images/')) {
 
 http_response_code(404);
 header('Content-Type: application/json; charset=utf-8');
-echo json_encode(['error' => 'Not Found', 'route' => $route]);
+echo json_encode(['error' => 'Not Found', 'route' => $route, 'script' => $_SERVER['SCRIPT_NAME'], 'request_uri' => $_SERVER['REQUEST_URI']]);
 
 // ═══════════════════════════════════════════
 //  页面渲染
@@ -296,7 +309,7 @@ button:disabled{background:#999;cursor:not-allowed}
       var text = await res.text();
       var data;
       try { data = JSON.parse(text); } catch(e) {
-        toast('服务器返回了非 JSON 响应 (' + res.status + ')', 'error');
+        toast('服务器返回了非 JSON (' + res.status + ')', 'error');
         console.error('Response:', text.substring(0, 500));
         return;
       }
