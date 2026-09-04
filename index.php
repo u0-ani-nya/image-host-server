@@ -16,9 +16,7 @@ function error_response($message, $status = 400) {
 
 function get_auth_token() {
     $auth = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-    if (str_starts_with($auth, 'Bearer ')) {
-        return trim(substr($auth, 7));
-    }
+    if (str_starts_with($auth, 'Bearer ')) return trim(substr($auth, 7));
     return '';
 }
 
@@ -36,40 +34,27 @@ function save_keys($keys) {
 }
 
 function is_valid_key($token) {
-    foreach (load_keys() as $k) {
-        if ($k['key'] === $token) return true;
-    }
+    foreach (load_keys() as $k) { if ($k['key'] === $token) return true; }
     return false;
 }
 
-function generate_filename($ext) {
-    return bin2hex(random_bytes(8)) . '.' . $ext;
-}
+function generate_filename($ext) { return bin2hex(random_bytes(8)) . '.' . $ext; }
 
 function get_base_url() {
     $proto = $_SERVER['HTTP_X_FORWARDED_PROTO'] ?? (($_SERVER['HTTPS'] ?? 'off') === 'on' ? 'https' : 'http');
     $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
-    $scriptDir = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
-    return $proto . '://' . $host . $scriptDir;
+    return $proto . '://' . $host . rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
 }
 
-function get_self() {
-    return $_SERVER['SCRIPT_NAME'];
-}
+function get_self() { return $_SERVER['SCRIPT_NAME']; }
 
-// 解析路由：支持 PATH_INFO 和 query string 两种方式
 function get_route() {
-    // 方式1: PATH_INFO (Nginx 配置了 fastcgi_split_path_info)
     $path = $_SERVER['PATH_INFO'] ?? '';
     if ($path) return $path;
-    // 方式2: query string _route 参数
     if (isset($_GET['_route'])) return $_GET['_route'];
-    // 方式3: 从 REQUEST_URI 中去掉 SCRIPT_NAME
-    $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-    $scriptName = $_SERVER['SCRIPT_NAME'];
-    if ($requestUri !== $scriptName && str_starts_with($requestUri, $scriptName)) {
-        return substr($requestUri, strlen($scriptName)) ?: '/';
-    }
+    $req = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+    $scr = $_SERVER['SCRIPT_NAME'];
+    if ($req !== $scr && str_starts_with($req, $scr)) return substr($req, strlen($scr)) ?: '/';
     return '/';
 }
 
@@ -87,18 +72,13 @@ $route = get_route();
 
 if ($method === 'POST' && ($route === '/api/login' || $route === '/api/login/')) {
     $input = json_decode(file_get_contents('php://input'), true);
-    $password = $input['password'] ?? '';
-    if ($password !== ADMIN_PASSWORD) {
-        error_response('密码错误', 401);
-    }
-    session_start();
-    $_SESSION['admin'] = true;
+    if (($input['password'] ?? '') !== ADMIN_PASSWORD) error_response('密码错误', 401);
+    session_start(); $_SESSION['admin'] = true;
     json_response(['ok' => true]);
 }
 
 if ($method === 'POST' && ($route === '/api/logout' || $route === '/api/logout/')) {
-    session_start();
-    session_destroy();
+    session_start(); session_destroy();
     json_response(['ok' => true]);
 }
 
@@ -106,8 +86,7 @@ if ($method === 'POST' && ($route === '/api/logout' || $route === '/api/logout/'
 
 if ($method === 'GET' && ($route === '/' || $route === '')) {
     session_start();
-    $logged_in = !empty($_SESSION['admin']);
-    if (!$logged_in) { show_login_page(); exit; }
+    if (empty($_SESSION['admin'])) { show_login_page(); exit; }
     show_admin_page();
     exit;
 }
@@ -117,11 +96,8 @@ if ($method === 'GET' && ($route === '/' || $route === '')) {
 if ($method === 'GET' && ($route === '/api/keys' || $route === '/api/keys/')) {
     if (!check_admin_auth()) error_response('未登录', 401);
     $keys = load_keys();
-    $file_count = 0;
-    if (is_dir(UPLOADS_DIR)) {
-        $file_count = count(array_filter(scandir(UPLOADS_DIR), fn($f) => !str_starts_with($f, '.')));
-    }
-    json_response(['keys' => $keys, 'fileCount' => $file_count]);
+    $fc = is_dir(UPLOADS_DIR) ? count(array_filter(scandir(UPLOADS_DIR), fn($f) => !str_starts_with($f, '.'))) : 0;
+    json_response(['keys' => $keys, 'fileCount' => $fc]);
 }
 
 // ─── API: 生成密钥 ───
@@ -131,10 +107,7 @@ if ($method === 'POST' && ($route === '/api/keys' || $route === '/api/keys/')) {
     $input = json_decode(file_get_contents('php://input'), true);
     $note = mb_substr(trim($input['note'] ?? ''), 0, 100);
     $key = bin2hex(random_bytes(16));
-    $key = sprintf('%s-%s-%s-%s-%s',
-        substr($key, 0, 8), substr($key, 8, 4), substr($key, 12, 4),
-        substr($key, 16, 4), substr($key, 20, 12)
-    );
+    $key = sprintf('%s-%s-%s-%s-%s', substr($key,0,8), substr($key,8,4), substr($key,12,4), substr($key,16,4), substr($key,20,12));
     $keys = load_keys();
     $keys[] = ['key' => $key, 'createdAt' => date('c'), 'note' => $note];
     save_keys($keys);
@@ -153,65 +126,68 @@ if ($method === 'DELETE' && str_starts_with($route, '/api/keys/')) {
     json_response(['ok' => true]);
 }
 
-// ─── 上传图片（兼容 ImgBed API 格式）───
+// ─── API: 列出图片（管理用）───
+
+if ($method === 'GET' && ($route === '/api/images' || $route === '/api/images/')) {
+    if (!check_admin_auth()) error_response('未登录', 401);
+    $images = [];
+    if (is_dir(UPLOADS_DIR)) {
+        $files = array_filter(scandir(UPLOADS_DIR), fn($f) => !str_starts_with($f, '.'));
+        foreach ($files as $f) {
+            $path = UPLOADS_DIR . $f;
+            $images[] = [
+                'filename' => $f,
+                'size' => filesize($path),
+                'time' => filemtime($path),
+                'mime' => mime_content_type($path),
+            ];
+        }
+        usort($images, fn($a, $b) => $b['time'] - $a['time']);
+    }
+    json_response(['images' => $images]);
+}
+
+// ─── API: 删除图片（管理用）───
+
+if ($method === 'DELETE' && str_starts_with($route, '/api/images/')) {
+    if (!check_admin_auth()) error_response('未登录', 401);
+    $filename = basename(substr($route, strlen('/api/images/')));
+    $filepath = UPLOADS_DIR . $filename;
+    if (!file_exists($filepath)) error_response('文件不存在', 404);
+    unlink($filepath);
+    json_response(['ok' => true]);
+}
+
+// ─── 上传图片（兼容 ImgBed API）───
 
 if ($method === 'POST' && ($route === '/upload' || $route === '/upload/')) {
     $token = get_auth_token();
-    if (!$token || !is_valid_key($token)) {
-        error_response('无效的上传密钥', 401);
-    }
-
-    if (!isset($_FILES['file'])) {
-        error_response('未找到文件字段');
-    }
-
+    if (!$token || !is_valid_key($token)) error_response('无效的上传密钥', 401);
+    if (!isset($_FILES['file'])) error_response('未找到文件字段');
     $file = $_FILES['file'];
-    if ($file['error'] !== UPLOAD_ERR_OK) {
-        error_response('上传错误: ' . $file['error']);
-    }
-
-    if ($file['size'] > MAX_FILE_SIZE) {
-        error_response('文件过大，最大 ' . (MAX_FILE_SIZE / 1024 / 1024) . 'MB');
-    }
-
+    if ($file['error'] !== UPLOAD_ERR_OK) error_response('上传错误: ' . $file['error']);
+    if ($file['size'] > MAX_FILE_SIZE) error_response('文件过大，最大 ' . (MAX_FILE_SIZE / 1024 / 1024) . 'MB');
     $mime = mime_content_type($file['tmp_name']);
-    if (!isset(ALLOWED_TYPES[$mime])) {
-        error_response('仅支持 PNG、JPEG、WebP 格式');
-    }
-
+    if (!isset(ALLOWED_TYPES[$mime])) error_response('仅支持 PNG、JPEG、WebP 格式');
     $ext = ALLOWED_TYPES[$mime];
     $filename = generate_filename($ext);
     $dest = UPLOADS_DIR . $filename;
-
     if (!is_dir(UPLOADS_DIR)) mkdir(UPLOADS_DIR, 0755, true);
-    if (!move_uploaded_file($file['tmp_name'], $dest)) {
-        error_response('保存文件失败', 500);
-    }
-
+    if (!move_uploaded_file($file['tmp_name'], $dest)) error_response('保存文件失败', 500);
     $base = get_base_url();
     $directUrl = $base . '/images/' . $filename;
-
     // 兼容 CloudFlare ImgBed 响应格式
-    // uploadToCfBed() 读取: item.publicUrl || item.url || item.src
-    json_response([[
-        'url'       => $directUrl,
-        'src'       => '/images/' . $filename,
-        'publicUrl' => $directUrl,
-    ]]);
+    json_response([['url' => $directUrl, 'src' => '/images/' . $filename, 'publicUrl' => $directUrl]]);
 }
 
-// ─── 删除图片 ───
+// ─── 删除图片（ImgBed 兼容）───
 
 if ($method === 'DELETE' && str_starts_with($route, '/file/')) {
     $token = get_auth_token();
-    if (!$token || !is_valid_key($token)) {
-        error_response('无效的上传密钥', 401);
-    }
-
+    if (!$token || !is_valid_key($token)) error_response('无效的上传密钥', 401);
     $filename = basename(substr($route, strlen('/file/')));
     $filepath = UPLOADS_DIR . $filename;
     if (!file_exists($filepath)) error_response('文件不存在', 404);
-
     unlink($filepath);
     json_response(['ok' => true]);
 }
@@ -221,15 +197,9 @@ if ($method === 'DELETE' && str_starts_with($route, '/file/')) {
 if ($method === 'GET' && str_starts_with($route, '/images/')) {
     $filename = basename(substr($route, strlen('/images/')));
     $filepath = UPLOADS_DIR . $filename;
-    if (!file_exists($filepath)) {
-        http_response_code(404);
-        echo 'Not Found';
-        exit;
-    }
-
+    if (!file_exists($filepath)) { http_response_code(404); echo 'Not Found'; exit; }
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-    $mime = ['png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'webp' => 'image/webp'][$ext] ?? 'application/octet-stream';
-
+    $mime = ['png'=>'image/png','jpg'=>'image/jpeg','jpeg'=>'image/jpeg','webp'=>'image/webp'][$ext] ?? 'application/octet-stream';
     header('Content-Type: ' . $mime);
     header('Content-Length: ' . filesize($filepath));
     header('Cache-Control: public, max-age=31536000');
@@ -241,7 +211,7 @@ if ($method === 'GET' && str_starts_with($route, '/images/')) {
 
 http_response_code(404);
 header('Content-Type: application/json; charset=utf-8');
-echo json_encode(['error' => 'Not Found', 'route' => $route, 'script' => $_SERVER['SCRIPT_NAME'], 'request_uri' => $_SERVER['REQUEST_URI']]);
+echo json_encode(['error' => 'Not Found', 'route' => $route]);
 
 // ═══════════════════════════════════════════
 //  页面渲染
@@ -280,51 +250,21 @@ button:disabled{background:#999;cursor:not-allowed}
 <div class="toast" id="toast"></div>
 <script type="text/javascript">
 (function(){
-  var self = <?= json_encode($self) ?>;
-  var btn = document.getElementById('loginBtn');
-  var pwdInput = document.getElementById('pwd');
-
-  btn.addEventListener('click', doLogin);
-  pwdInput.addEventListener('keydown', function(e) { if(e.key==='Enter') doLogin(); });
-
-  function toast(msg, type) {
-    var el = document.getElementById('toast');
-    el.textContent = msg;
-    el.className = 'toast ' + (type || 'error');
-    el.classList.add('show');
-    setTimeout(function(){ el.classList.remove('show'); }, 4000);
-  }
-
-  async function doLogin() {
-    var pwd = pwdInput.value;
-    if (!pwd) { toast('请输入密码', 'error'); return; }
-    btn.disabled = true;
-    btn.textContent = '登录中...';
-    try {
-      var res = await fetch(self + '?_route=/api/login', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({password: pwd})
-      });
-      var text = await res.text();
-      var data;
-      try { data = JSON.parse(text); } catch(e) {
-        toast('服务器返回了非 JSON (' + res.status + ')', 'error');
-        console.error('Response:', text.substring(0, 500));
-        return;
-      }
-      if (res.ok) {
-        toast('登录成功', 'success');
-        setTimeout(function(){ location.reload(); }, 500);
-      } else {
-        toast(data.error || '登录失败 (' + res.status + ')', 'error');
-      }
-    } catch (e) {
-      toast('网络错误: ' + e.message, 'error');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = '登录';
-    }
+  var self=<?=json_encode($self)?>;
+  var btn=document.getElementById('loginBtn'),pwd=document.getElementById('pwd');
+  btn.addEventListener('click',doLogin);
+  pwd.addEventListener('keydown',function(e){if(e.key==='Enter')doLogin()});
+  function toast(m,t){var e=document.getElementById('toast');e.textContent=m;e.className='toast '+(t||'error');e.classList.add('show');setTimeout(function(){e.classList.remove('show')},4000)}
+  async function doLogin(){
+    if(!pwd.value){toast('请输入密码','error');return}
+    btn.disabled=true;btn.textContent='登录中...';
+    try{
+      var r=await fetch(self+'?_route=/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pwd.value})});
+      var t=await r.text(),d;try{d=JSON.parse(t)}catch(e){toast('服务器返回非 JSON ('+r.status+')','error');return}
+      if(r.ok){toast('登录成功','success');setTimeout(function(){location.reload()},500)}
+      else toast(d.error||'登录失败','error')
+    }catch(e){toast('网络错误: '+e.message,'error')}
+    finally{btn.disabled=false;btn.textContent='登录'}
   }
 })();
 </script>
@@ -346,7 +286,7 @@ function show_admin_page() {
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,system-ui,sans-serif;background:#f5f5f5;color:#333;min-height:100vh}
-.container{max-width:640px;margin:0 auto;padding:24px}
+.container{max-width:900px;margin:0 auto;padding:24px}
 h1{font-size:20px;margin-bottom:4px}
 .subtitle{color:#888;font-size:13px;margin-bottom:24px}
 .card{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
@@ -375,6 +315,18 @@ h1{font-size:20px;margin-bottom:4px}
 .top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
 .logout{color:#888;font-size:12px;cursor:pointer}
 .logout:hover{color:#333}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+.gallery-item{border:1px solid #eee;border-radius:8px;overflow:hidden;background:#fafafa;position:relative}
+.gallery-item img{width:100%;height:140px;object-fit:cover;display:block;cursor:pointer}
+.gallery-info{padding:8px;font-size:11px;color:#666}
+.gallery-info .name{font-family:monospace;word-break:break-all;color:#333;margin-bottom:4px}
+.gallery-info .meta{display:flex;justify-content:space-between;align-items:center}
+.gallery-actions{display:flex;gap:4px;padding:0 8px 8px}
+.preview-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:1000;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.preview-overlay img{max-width:90vw;max-height:90vh;object-fit:contain;border-radius:4px}
+.tab-bar{display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid #eee}
+.tab{padding:8px 16px;cursor:pointer;font-size:13px;color:#888;border-bottom:2px solid transparent;margin-bottom:-2px}
+.tab.active{color:#333;border-bottom-color:#333}
 </style>
 </head>
 <body>
@@ -382,27 +334,41 @@ h1{font-size:20px;margin-bottom:4px}
   <div class="top-bar">
     <div>
       <h1>🖨️ 图床管理</h1>
-      <p class="subtitle">生成密钥后，在 WeChat Printer 图床设置中填入服务器地址和密钥即可使用。</p>
+      <p class="subtitle">管理上传密钥和已上传的图片。</p>
     </div>
     <span class="logout" id="logoutBtn">退出登录</span>
   </div>
 
   <div class="stats" id="stats"></div>
 
-  <div class="card">
-    <h2>🔑 上传密钥</h2>
-    <div class="input-row">
-      <input type="text" id="noteInput" placeholder="备注（可选，如：给小明的密钥）">
-      <button class="btn btn-primary" id="genBtn">生成新密钥</button>
-    </div>
-    <ul class="key-list" id="keyList"></ul>
-    <div class="empty" id="emptyHint">暂无密钥，点击上方按钮生成</div>
+  <div class="tab-bar">
+    <div class="tab active" data-tab="keys">🔑 上传密钥</div>
+    <div class="tab" data-tab="images">🖼️ 图片管理</div>
   </div>
 
-  <div class="card">
-    <h2>📋 客户端配置</h2>
-    <div class="server-url"><?= htmlspecialchars($base) ?></div>
-    <p style="font-size:12px;color:#888">在 WeChat Printer → 设置 → 图床设置 → 选择「自定义图床」，填入上方地址和你生成的密钥。</p>
+  <div id="tabKeys">
+    <div class="card">
+      <h2>上传密钥</h2>
+      <div class="input-row">
+        <input type="text" id="noteInput" placeholder="备注（可选，如：给小明的密钥）">
+        <button class="btn btn-primary" id="genBtn">生成新密钥</button>
+      </div>
+      <ul class="key-list" id="keyList"></ul>
+      <div class="empty" id="keyEmpty">暂无密钥，点击上方按钮生成</div>
+    </div>
+    <div class="card">
+      <h2>📋 客户端配置</h2>
+      <div class="server-url"><?= htmlspecialchars($base) ?></div>
+      <p style="font-size:12px;color:#888">在 WeChat Printer → 设置 → 图床设置 → 选择「CloudFlare ImgBed」，站点地址填上方地址，Token 填你的密钥。</p>
+    </div>
+  </div>
+
+  <div id="tabImages" style="display:none">
+    <div class="card">
+      <h2>已上传图片 <span id="imgCount" style="font-weight:normal;color:#888;font-size:13px"></span></h2>
+      <div class="gallery" id="gallery"></div>
+      <div class="empty" id="imgEmpty">暂无图片</div>
+    </div>
   </div>
 </div>
 
@@ -410,77 +376,78 @@ h1{font-size:20px;margin-bottom:4px}
 
 <script type="text/javascript">
 (function(){
-  var self = <?= json_encode($self) ?>;
+  var self=<?=json_encode($self)?>,base=<?=json_encode($base)?>;
 
-  function toast(msg, type) {
-    var el = document.getElementById('toast');
-    el.textContent = msg;
-    el.className = 'toast ' + (type || 'error');
-    el.classList.add('show');
-    setTimeout(function(){ el.classList.remove('show'); }, 3000);
-  }
+  function toast(m,t){var e=document.getElementById('toast');e.textContent=m;e.className='toast '+(t||'error');e.classList.add('show');setTimeout(function(){e.classList.remove('show')},3000)}
+  function api(p,o){return fetch(self+'?_route='+encodeURIComponent(p),o||{})}
 
-  function api(path, opts) {
-    return fetch(self + '?_route=' + encodeURIComponent(path), opts || {});
-  }
-
-  document.getElementById('logoutBtn').addEventListener('click', function() {
-    api('/api/logout', {method:'POST'}).then(function(){ location.reload(); });
+  // Tab switching
+  document.querySelectorAll('.tab').forEach(function(tab){
+    tab.addEventListener('click',function(){
+      document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active')});
+      tab.classList.add('active');
+      document.getElementById('tabKeys').style.display=tab.dataset.tab==='keys'?'':'none';
+      document.getElementById('tabImages').style.display=tab.dataset.tab==='images'?'':'none';
+      if(tab.dataset.tab==='images') loadImages();
+    });
   });
-  document.getElementById('genBtn').addEventListener('click', generateKey);
-  document.getElementById('noteInput').addEventListener('keydown', function(e) { if(e.key==='Enter') generateKey(); });
 
-  async function loadKeys() {
-    var res = await api('/api/keys');
-    if (res.status === 401) { location.reload(); return; }
-    var data = await res.json();
-    var list = document.getElementById('keyList');
-    var empty = document.getElementById('emptyHint');
-    var stats = document.getElementById('stats');
+  document.getElementById('logoutBtn').addEventListener('click',function(){api('/api/logout',{method:'POST'}).then(function(){location.reload()})});
+  document.getElementById('genBtn').addEventListener('click',generateKey);
+  document.getElementById('noteInput').addEventListener('keydown',function(e){if(e.key==='Enter')generateKey()});
 
-    if (!data.keys.length) {
-      list.innerHTML = '';
-      empty.style.display = 'block';
-      stats.innerHTML = '';
-      return;
-    }
-    empty.style.display = 'none';
-    stats.innerHTML = '<span>共 ' + data.keys.length + ' 个密钥</span><span>' + (data.fileCount || 0) + ' 张图片</span>';
-    list.innerHTML = data.keys.map(function(k) {
-      return '<li>' +
-        '<div style="flex:1;margin-right:12px">' +
-        '<div class="key-value">' + k.key + '</div>' +
-        '<div class="key-meta">' + (k.note ? k.note + ' · ' : '') + '创建于 ' + new Date(k.createdAt).toLocaleString('zh-CN') + '</div>' +
-        '</div>' +
-        '<button class="btn btn-danger btn-sm" data-copy="' + k.key + '">复制</button>' +
-        '<button class="btn btn-danger btn-sm" data-del="' + k.key + '" style="margin-left:4px">删除</button>' +
-        '</li>';
+  function fmtSize(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(1)+'KB';return(b/1048576).toFixed(1)+'MB'}
+
+  async function loadKeys(){
+    var r=await api('/api/keys');if(r.status===401){location.reload();return}
+    var d=await r.json(),list=document.getElementById('keyList'),empty=document.getElementById('keyEmpty'),stats=document.getElementById('stats');
+    if(!d.keys.length){list.innerHTML='';empty.style.display='block';stats.innerHTML='';return}
+    empty.style.display='none';
+    stats.innerHTML='<span>共 '+d.keys.length+' 个密钥</span><span>'+(d.fileCount||0)+' 张图片</span>';
+    list.innerHTML=d.keys.map(function(k){
+      return '<li><div style="flex:1;margin-right:12px"><div class="key-value">'+k.key+'</div><div class="key-meta">'+(k.note?k.note+' · ':'')+'创建于 '+new Date(k.createdAt).toLocaleString('zh-CN')+'</div></div><button class="btn btn-sm" data-copy="'+k.key+'">复制</button><button class="btn btn-danger btn-sm" data-del="'+k.key+'" style="margin-left:4px">删除</button></li>'
     }).join('');
-
-    list.querySelectorAll('[data-copy]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        navigator.clipboard.writeText(btn.getAttribute('data-copy')).then(function(){ toast('已复制到剪贴板', 'success'); });
-      });
-    });
-    list.querySelectorAll('[data-del]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        var key = btn.getAttribute('data-del');
-        if (!confirm('确定删除此密钥？')) return;
-        api('/api/keys/' + key, { method: 'DELETE' }).then(function(){ toast('密钥已删除', 'success'); loadKeys(); });
-      });
-    });
+    list.querySelectorAll('[data-copy]').forEach(function(b){b.addEventListener('click',function(){navigator.clipboard.writeText(b.getAttribute('data-copy')).then(function(){toast('已复制','success')})})});
+    list.querySelectorAll('[data-del]').forEach(function(b){b.addEventListener('click',function(){if(!confirm('确定删除此密钥？'))return;api('/api/keys/'+b.getAttribute('data-del'),{method:'DELETE'}).then(function(){toast('已删除','success');loadKeys()})})});
   }
 
-  async function generateKey() {
-    var note = document.getElementById('noteInput').value.trim();
-    var res = await api('/api/keys', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({note: note}) });
-    var data = await res.json();
-    if (data.key) {
-      document.getElementById('noteInput').value = '';
-      toast('密钥已生成', 'success');
-      loadKeys();
-    }
+  async function generateKey(){
+    var n=document.getElementById('noteInput').value.trim();
+    var r=await api('/api/keys',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:n})});
+    var d=await r.json();if(d.key){document.getElementById('noteInput').value='';toast('密钥已生成','success');loadKeys()}
   }
+
+  async function loadImages(){
+    var r=await api('/api/images');if(r.status===401){location.reload();return}
+    var d=await r.json(),g=document.getElementById('gallery'),empty=document.getElementById('imgEmpty'),cnt=document.getElementById('imgCount');
+    if(!d.images.length){g.innerHTML='';empty.style.display='block';cnt.textContent='';return}
+    empty.style.display='none';
+    cnt.textContent='('+d.images.length+' 张)';
+    g.innerHTML=d.images.map(function(img){
+      var url=base+'/images/'+img.filename;
+      return '<div class="gallery-item" data-file="'+img.filename+'">'+
+        '<img src="'+url+'" loading="lazy" onclick="window._preview(this.src)">'+
+        '<div class="gallery-info"><div class="name">'+img.filename+'</div><div class="meta"><span>'+fmtSize(img.size)+'</span><span>'+new Date(img.time*1000).toLocaleDateString('zh-CN')+'</span></div></div>'+
+        '<div class="gallery-actions"><button class="btn btn-sm" data-copy-url="'+url+'">复制链接</button><button class="btn btn-danger btn-sm" data-del-img="'+img.filename+'">删除</button></div></div>'
+    }).join('');
+    g.querySelectorAll('[data-copy-url]').forEach(function(b){b.addEventListener('click',function(){navigator.clipboard.writeText(b.getAttribute('data-copy-url')).then(function(){toast('链接已复制','success')})})});
+    g.querySelectorAll('[data-del-img]').forEach(function(b){b.addEventListener('click',function(){
+      var f=b.getAttribute('data-del-img');
+      if(!confirm('确定删除 '+f+'？'))return;
+      api('/api/images/'+f,{method:'DELETE'}).then(function(r){return r.json()}).then(function(d){
+        if(d.ok){toast('已删除','success');loadImages();loadKeys()}
+        else toast(d.error||'删除失败','error')
+      })
+    })});
+  }
+
+  // Image preview
+  window._preview=function(src){
+    var ov=document.createElement('div');ov.className='preview-overlay';
+    var img=document.createElement('img');img.src=src;
+    ov.appendChild(img);ov.addEventListener('click',function(){ov.remove()});
+    document.body.appendChild(ov);
+  };
 
   loadKeys();
 })();
