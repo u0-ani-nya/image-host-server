@@ -263,26 +263,62 @@ h1{font-size:18px;margin-bottom:20px;text-align:center}
 input{width:100%;padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:14px;margin-bottom:12px}
 button{width:100%;padding:10px;border:none;border-radius:8px;background:#333;color:#fff;font-size:14px;cursor:pointer}
 button:hover{background:#555}
-.error{color:#e44;font-size:13px;margin-bottom:8px;display:none}
+button:disabled{background:#999;cursor:not-allowed}
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);padding:12px 20px;border-radius:8px;font-size:13px;z-index:999;opacity:0;transition:.3s;pointer-events:none;max-width:80vw;text-align:center}
+.toast.show{opacity:1}
+.toast.error{background:#fee;color:#c00;border:1px solid #fcc}
+.toast.success{background:#efe;color:#060;border:1px solid #cfc}
+.toast.info{background:#eef;color:#006;border:1px for #ccf}
 </style>
 </head>
 <body>
 <div class="login-box">
   <h1>🖨️ 图床管理</h1>
-  <div class="error" id="err"></div>
   <input type="password" id="pwd" placeholder="管理密码" autofocus>
   <button type="button" id="loginBtn">登录</button>
 </div>
+<div class="toast" id="toast"></div>
 <script type="text/javascript">
 (function(){
   var self = <?= json_encode($self) ?>;
-  document.getElementById('loginBtn').addEventListener('click', doLogin);
-  document.getElementById('pwd').addEventListener('keydown', function(e) { if(e.key==='Enter') doLogin(); });
+  var btn = document.getElementById('loginBtn');
+  var pwdInput = document.getElementById('pwd');
+
+  btn.addEventListener('click', doLogin);
+  pwdInput.addEventListener('keydown', function(e) { if(e.key==='Enter') doLogin(); });
+
+  function toast(msg, type) {
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast ' + (type || 'error');
+    el.classList.add('show');
+    setTimeout(function(){ el.classList.remove('show'); }, 4000);
+  }
+
   async function doLogin() {
-    var pwd = document.getElementById('pwd').value;
-    var res = await fetch(self + '/api/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pwd})});
-    if (res.ok) location.reload();
-    else { var d = await res.json(); document.getElementById('err').textContent = d.error||'登录失败'; document.getElementById('err').style.display='block'; }
+    var pwd = pwdInput.value;
+    if (!pwd) { toast('请输入密码', 'error'); return; }
+    btn.disabled = true;
+    btn.textContent = '登录中...';
+    try {
+      var res = await fetch(self + '/api/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password: pwd})
+      });
+      var data = await res.json();
+      if (res.ok) {
+        toast('登录成功', 'success');
+        setTimeout(function(){ location.reload(); }, 500);
+      } else {
+        toast(data.error || '登录失败 (' + res.status + ')', 'error');
+      }
+    } catch (e) {
+      toast('请求失败: ' + e.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '登录';
+    }
   }
 })();
 </script>
