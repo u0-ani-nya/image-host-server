@@ -31,7 +31,8 @@ function load_keys() {
 function save_keys($keys) {
     $dir = dirname(KEYS_FILE);
     if (!is_dir($dir)) mkdir($dir, 0755, true);
-    file_put_contents(KEYS_FILE, json_encode(['keys' => $keys], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+    $ok = @file_put_contents(KEYS_FILE, json_encode(['keys' => $keys], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+    if ($ok === false) error_response('写入密钥文件失败，请检查 data/ 目录权限（需要 PHP 可写）', 500);
 }
 
 function is_valid_key($token) {
