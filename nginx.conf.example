@@ -1,35 +1,42 @@
 server {
     listen 80;
-    server_name img.example.com;  # 改成你的域名
+    listen [::]:80;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+
+    server_name img.ani-nya.com;  # 改成你的域名
+
+    ssl_certificate /root/.acme.sh/img.ani-nya.com_ecc/img.ani-nya.com.pem;
+    ssl_certificate_key /root/.acme.sh/img.ani-nya.com_ecc/img.ani-nya.com.key;
 
     client_max_body_size 10M;
 
-    root /path/to/image-host-server;  # 改成实际路径
+    root /mnt/slab/www/app/api/image-host-server;
     index index.php;
 
-    # 图片直接返回（不走 PHP）
-    location /images/ {
-        alias /path/to/image-host-server/data/uploads/;  # 改成实际路径
-        expires 365d;
-        add_header Cache-Control "public, immutable";
-        try_files $uri =404;
+    # 静态文件直接返回，其他全部交给 PHP
+    location / {
+        try_files $uri $uri/ @php;
     }
 
-    # PHP 处理（支持 PATH_INFO，兼容 ImgBed API 格式）
+    # PHP 处理（保留原始路径作为 PATH_INFO）
     location ~ \.php(/|$) {
         fastcgi_split_path_info ^(.+\.php)(/.+)$;
-        fastcgi_pass unix:/run/php/php8.3-fpm.sock;  # 根据实际 PHP 版本修改
+        include snippets/fastcgi-php.conf;
+        include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         fastcgi_param PATH_INFO $fastcgi_path_info;
-        include fastcgi_params;
+        fastcgi_pass 127.0.0.1:9000;
     }
 
-    # 其他请求
-    location / {
-        try_files $uri $uri/ /index.php;
+    # 找不到文件时，交给 index.php，原始路径作为 PATH_INFO
+    location @php {
+        fastcgi_param SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_param PATH_INFO $uri;
+        include fastcgi_params;
+        fastcgi_pass 127.0.0.1:9000;
     }
 
     # 禁止访问配置文件和数据目录
-    location ~ /config\.php$ { deny all; }
-    location ~ /data/ { deny all; }
+    location ~ /(config\.php|data/) { deny all; }
 }
