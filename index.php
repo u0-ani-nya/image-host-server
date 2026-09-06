@@ -175,9 +175,9 @@ if ($method === 'POST' && ($route === '/upload' || $route === '/upload/')) {
     if (!is_dir(UPLOADS_DIR)) mkdir(UPLOADS_DIR, 0755, true);
     if (!move_uploaded_file($file['tmp_name'], $dest)) error_response('保存文件失败', 500);
     $base = get_base_url();
-    $directUrl = $base . '/images/' . $filename;
-    // 兼容 CloudFlare ImgBed 响应格式
-    json_response([['url' => $directUrl, 'src' => '/images/' . $filename, 'publicUrl' => $directUrl]]);
+    $directUrl = $base . '/file/' . $filename;
+    // 兼容 CloudFlare ImgBed 响应格式（src 用 /file/ 前缀）
+    json_response([['src' => '/file/' . $filename, 'publicUrl' => $directUrl]]);
 }
 
 // ─── 删除图片（ImgBed 兼容）───
@@ -192,10 +192,11 @@ if ($method === 'DELETE' && str_starts_with($route, '/file/')) {
     json_response(['ok' => true]);
 }
 
-// ─── 访问图片 ───
+// ─── 访问图片（/file/ 和 /images/ 两种路径）───
 
-if ($method === 'GET' && str_starts_with($route, '/images/')) {
-    $filename = basename(substr($route, strlen('/images/')));
+if ($method === 'GET' && (str_starts_with($route, '/file/') || str_starts_with($route, '/images/'))) {
+    $prefix = str_starts_with($route, '/file/') ? '/file/' : '/images/';
+    $filename = basename(substr($route, strlen($prefix)));
     $filepath = UPLOADS_DIR . $filename;
     if (!file_exists($filepath)) { http_response_code(404); echo 'Not Found'; exit; }
     $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
